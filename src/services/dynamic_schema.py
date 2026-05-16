@@ -1,10 +1,9 @@
 """
 Concrete implementation — Dynamic Schema Generator (LLM-powered).
 
-Analyses user query semantics to produce a tailored JSON schema.
-Mandatory fields are always present; extra fields are inferred.
-Open/Closed: new mandatory fields can be added to MANDATORY_FIELDS
-without changing the LLM prompt logic.
+Analyses user query semantics to produce a fully dynamic JSON schema.
+All fields are inferred by the LLM based on the user's query — there
+are no hard-coded mandatory fields.
 """
 
 import json
@@ -16,34 +15,15 @@ from src.utils.logger import get_logger
 
 log = get_logger("dynamic_schema")
 
-# These fields are ALWAYS present in every output
-MANDATORY_FIELDS = [
-    {
-        "name": "source_link",
-        "type": "string",
-        "description": "The URL of the page this data was scraped from.",
-    },
-    {
-        "name": "title",
-        "type": "string",
-        "description": "The title or headline of the content.",
-    },
-    {
-        "name": "main_content",
-        "type": "string",
-        "description": "Key details, summary, or description of the item.",
-    },
-]
+
 
 _SYSTEM_PROMPT = """\
 You are a schema architect. Given a user's data-retrieval query, you must 
-propose ADDITIONAL fields (beyond the mandatory ones) that would be useful 
-for structuring the scraped results.
+propose ALL fields that would be useful for structuring the scraped results.
 
-Mandatory fields that are ALWAYS included (do NOT repeat these):
-- source_link (string): URL of the scraped page
-- title (string): headline / title
-- main_content (string): key details or summary
+There are NO mandatory fields — you decide the complete schema based on the query.
+Always include a "source_link" (string) field for the URL of the scraped page,
+and consider including fields like "title" or "name" when appropriate.
 
 Respond with a JSON array of objects. Each object has:
   {"name": "<field_name>", "type": "<string|number|boolean|array>", "description": "<what this field captures>"}
@@ -51,7 +31,7 @@ Respond with a JSON array of objects. Each object has:
 Rules:
 1. Field names must be snake_case.
 2. Only add fields that are genuinely relevant to the query.
-3. Keep it concise — typically 2-8 extra fields.
+3. Keep it concise — typically 3-10 fields total.
 4. For numeric data (prices, ratings, counts), use type "number".
 5. For lists (tags, features, requirements), use type "array".
 6. If the user explicitly requested specific fields, include all of them.
@@ -69,13 +49,14 @@ class DynamicSchemaGenerator(ISchemaGenerator):
         )
 
     def generate_schema(self, user_query: str) -> list[dict]:
-        """Return mandatory + dynamically inferred fields."""
+        """Return dynamically inferred fields (no mandatory fields)."""
         log.info("Generating dynamic schema for query: %s", user_query)
 
         try:
             response = self._client.chat.completions.create(
                 model=settings.OPENROUTER_MODEL,
                 temperature=0.2,
+                max_tokens=512,
                 messages=[
                     {"role": "system", "content": _SYSTEM_PROMPT},
                     {"role": "user", "content": user_query},
@@ -90,16 +71,14 @@ class DynamicSchemaGenerator(ISchemaGenerator):
                 raw = raw.rsplit("```", 1)[0]
             raw = raw.strip()
 
-            dynamic_fields: list[dict] = json.loads(raw)
+            fields: list[dict] = json.loads(raw)
             log.info(
-                "LLM proposed %d dynamic fields: %s",
-                len(dynamic_fields),
-                [f["name"] for f in dynamic_fields],
+                "LLM proposed %d fields: %s",
+                len(fields),
+                [f["name"] for f in fields],
             )
         except Exception as exc:
-            log.warning("Schema generation failed (%s); using mandatory only", exc)
-            dynamic_fields = []
+            log.warning("Schema generation failed (%s); returning empty schema", exc)
+            fields = []
 
-        # Merge: mandatory first, then dynamic
-        all_fields = list(MANDATORY_FIELDS) + dynamic_fields
-        return all_fields
+        return fields

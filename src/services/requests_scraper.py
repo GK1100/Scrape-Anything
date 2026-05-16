@@ -116,6 +116,25 @@ class RequestsScraper(IScraper):
 
         return self._extract_text(html, url)
 
+    def fetch_html(self, url: str) -> str | None:
+        """
+        Fetch the raw HTML of a URL without text extraction.
+
+        This preserves the full HTML structure (links, cards, tiles, etc.)
+        so downstream code can extract clickable elements.
+        """
+        domain = urlparse(url).netloc.replace("www.", "")
+        if any(blocked in domain for blocked in _HARD_BLOCKED_DOMAINS):
+            log.warning("Skipping hard-blocked domain: %s", domain)
+            return None
+
+        log.info("Fetching raw HTML: %s", url)
+        html = self._fetch_with_retry(url)
+        if html is None:
+            log.info("Trying Playwright fallback for raw HTML: %s", url)
+            html = self._fetch_with_playwright(url)
+        return html
+
     def extract_article_links(self, url: str, html: str | None = None) -> list[str]:
         """
         Extract article links from an index/category page.
@@ -149,6 +168,97 @@ class RequestsScraper(IScraper):
 
         log.info("Extracted %d article links from index page %s", len(links), url)
         return links[:10]
+
+    def extract_all_links(self, url: str, html: str | None = None) -> list[dict]:
+        """
+        Extract ALL clickable/navigable elements from a page.
+
+        Goes beyond simple <a> tags to capture the full range of clickable
+        UI elements on modern web pages:
+          - Links / Hyperlinks (<a> tags)
+          - Cards / Tiles (elements with data-href, data-url, data-link)
+          - Onclick handlers with URLs (onclick="window.location=...")
+          - Elements with role="link"
+          - Clickable list items (<li> wrapping <a>)
+          - Interactive containers / CTA components
+
+        Returns a list of {"url": str, "text": str} dicts so the LLM can
+        decide which links are relevant to the user's query.
+        """
+        if html is None:
+            html = self._fetch_with_retry(url)
+        if not html:
+            return []
+
+        soup = BeautifulSoup(html, "lxml")
+        links: list[dict] = []
+        seen: set[str] = set()
+
+        # Skip obvious non-content anchor text patterns
+        _skip_texts = {
+            "", "home", "about", "contact", "login", "signup", "sign up",
+            "register", "privacy", "terms", "cookie", "menu", "close",
+            "search", "subscribe", "newsletter", "log in", "sign in",
+            "×", "x", "#", "...", "more", "skip to content",
+        }
+
+        def _add_link(raw_url: str, text: str) -> None:
+            """Normalise, deduplicate, and add a link."""
+            if not raw_url:
+                return
+            resolved = urljoin(url, raw_url)
+            parsed = urlparse(resolved)
+            if parsed.scheme not in ("http", "https"):
+                return
+            clean = f"{parsed.scheme}://{parsed.netloc}{parsed.path}".rstrip("/")
+            if clean in seen or clean == url.rstrip("/"):
+                return
+            text = (text or "").strip()
+            if text.lower() in _skip_texts:
+                return
+            seen.add(clean)
+            links.append({"url": clean, "text": text})
+
+        # ── 1. Standard <a href="..."> tags ────────────────────────────────
+        for a_tag in soup.find_all("a", href=True):
+            href = a_tag["href"]
+            anchor_text = a_tag.get_text(strip=True)
+            _add_link(href, anchor_text)
+
+        # ── 2. Elements with data-href / data-url / data-link attrs ───────
+        #    (Cards, tiles, clickable containers)
+        for attr in ("data-href", "data-url", "data-link", "data-target-url"):
+            for el in soup.find_all(attrs={attr: True}):
+                href = el[attr]
+                text = el.get_text(strip=True)[:120]  # cap long card text
+                _add_link(href, text)
+
+        # ── 3. onclick handlers containing URLs ───────────────────────────
+        _url_in_js = re.compile(
+            r"""(?:window\.location|location\.href|window\.open)\s*[=(]\s*['"]([^'"]+)['"]"""
+        )
+        for el in soup.find_all(attrs={"onclick": True}):
+            match = _url_in_js.search(el["onclick"])
+            if match:
+                text = el.get_text(strip=True)[:120]
+                _add_link(match.group(1), text)
+
+        # ── 4. Elements with role="link" ───────────────────────────────────
+        for el in soup.find_all(attrs={"role": "link"}):
+            # Check for a nested <a> first
+            nested_a = el.find("a", href=True)
+            if nested_a:
+                _add_link(nested_a["href"], el.get_text(strip=True)[:120])
+                continue
+            # Check data attrs
+            for attr in ("data-href", "data-url", "href"):
+                val = el.get(attr)
+                if val:
+                    _add_link(val, el.get_text(strip=True)[:120])
+                    break
+
+        log.info("Extracted %d clickable links from %s", len(links), url)
+        return links
 
     def is_index_page(self, content: str, url: str = "") -> bool:
         """

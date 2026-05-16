@@ -17,13 +17,9 @@ class SearchResult(BaseModel):
 
 
 class ScrapedItem(BaseModel):
-    """A single item of structured scraped data."""
+    """A single item of structured scraped data (all fields dynamic)."""
 
-    source_link: str = Field(..., description="URL of the scraped page")
-    title: str = Field(..., description="Title / headline")
-    main_content: str = Field(..., description="Primary extracted content")
-
-    # Extra dynamic fields go here as a catch-all
+    # All fields are now dynamically generated based on query semantics
     extra_fields: dict[str, Any] = Field(
         default_factory=dict,
         description="Dynamically generated fields based on query semantics",

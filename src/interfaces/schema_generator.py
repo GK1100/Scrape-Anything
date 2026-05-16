@@ -15,8 +15,7 @@ class ISchemaGenerator(ABC):
         """
         Analyse the user query and return a list of field definitions.
 
-        Mandatory fields (source_link, title, main_content) are always
-        included. Additional fields are inferred from query semantics.
+        All fields are dynamically inferred from query semantics.
 
         Returns
         -------

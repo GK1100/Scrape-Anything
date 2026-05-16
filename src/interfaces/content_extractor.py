@@ -27,7 +27,7 @@ class IContentExtractor(ABC):
         raw_content : str
             The raw text/HTML of the page.
         source_url : str
-            The URL that was scraped (mandatory output field).
+            The URL that was scraped.
         schema_fields : list[dict]
             List of field definitions, e.g.
             [{"name": "price", "type": "string", "description": "..."}]

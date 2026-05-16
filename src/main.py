@@ -5,10 +5,12 @@ Wires up all dependencies and runs the pipeline.
 Usage:
     python -m src.main
     python -m src.main "Give me top 10 AI news in the past 2 days"
+    python -m src.main "AI news" --url https://example.com/ai-news
 """
 
 import sys
 import json
+import argparse
 
 from src.config import Settings
 from src.utils.logger import get_logger
@@ -36,9 +38,15 @@ def main() -> None:
         log.error("Please fill in your .env file. See .env.example for reference.")
         sys.exit(1)
 
-    # ── Get user query ────────────────────────────────────────────────
-    if len(sys.argv) > 1:
-        user_query = " ".join(sys.argv[1:])
+    # ── Parse arguments ────────────────────────────────────────────
+    parser = argparse.ArgumentParser(description="AI Scraping Agent")
+    parser.add_argument("query", nargs="*", help="Data query to scrape")
+    parser.add_argument("--url", type=str, default=None, help="Optional target URL to scrape")
+    args = parser.parse_args()
+
+    # ── Get user query ──────────────────────────────────────────────
+    if args.query:
+        user_query = " ".join(args.query)
     else:
         print("\n" + "=" * 56)
         print("       AI SCRAPING AGENT")
@@ -51,6 +59,8 @@ def main() -> None:
     if not user_query:
         log.error("No query provided. Exiting.")
         sys.exit(1)
+
+    target_url = args.url
 
     # ── Wire dependencies (Dependency Injection) ──────────────────────
     search_provider = SerperSearchProvider()
@@ -67,8 +77,13 @@ def main() -> None:
         query_analyzer=query_analyzer,
     )
 
-    # ── Execute ───────────────────────────────────────────────────────
-    result = pipeline.run(user_query, max_urls=Settings.MAX_URLS)
+    # ── Execute ───────────────────────────────────────────────────
+    try:
+        result = pipeline.run(user_query, max_urls=Settings.MAX_URLS, target_url=target_url)
+    except PermissionError as e:
+        log.error(str(e))
+        print(f"\n  [ERROR]  {e}")
+        sys.exit(1)
 
     # ── Save output ───────────────────────────────────────────────────
     output_path = ScrapingPipeline.save_to_json(result)

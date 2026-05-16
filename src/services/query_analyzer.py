@@ -104,6 +104,7 @@ class QueryAnalyzer:
             response = self._client.chat.completions.create(
                 model=settings.OPENROUTER_MODEL,
                 temperature=0.2,
+                max_tokens=256,
                 messages=[
                     {"role": "system", "content": _SYSTEM_PROMPT},
                     {"role": "user", "content": user_query},

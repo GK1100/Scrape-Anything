@@ -25,7 +25,6 @@ st.set_page_config(
 
 # ── Constants ────────────────────────────────────────────────────────────
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "output")
-MANDATORY_FIELDS = {"source_link", "title", "main_content"}
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────
@@ -75,7 +74,7 @@ def compute_completeness(results: list[dict], schema_fields: list[dict]) -> floa
     return (filled / total_cells) * 100 if total_cells else 0.0
 
 
-def run_pipeline(query: str):
+def run_pipeline(query: str, target_url: str | None = None):
     """Run the scraping pipeline and return the result dict."""
     from src.config import Settings
     from src.services.serper_search import SerperSearchProvider
@@ -97,7 +96,7 @@ def run_pipeline(query: str):
         schema_generator=DynamicSchemaGenerator(),
         query_analyzer=QueryAnalyzer(),
     )
-    result = pipeline.run(query, max_urls=Settings.MAX_URLS)
+    result = pipeline.run(query, max_urls=Settings.MAX_URLS, target_url=target_url or None)
     ScrapingPipeline.save_to_json(result)
     return result.model_dump()
 
@@ -258,11 +257,21 @@ if mode == "🚀 New Scrape":
         placeholder="e.g. Find top 10 AI startups with name, funding, description, and founder",
         height=100,
     )
+    target_url_input = st.text_input(
+        "🔗 Target URL (optional)",
+        placeholder="e.g. https://example.com/page-to-scrape",
+        help="Provide a specific URL to scrape. Leave empty to let the agent search automatically.",
+    )
     run_btn = st.button("🚀 Run Scrape", type="primary", use_container_width=True)
 
     if run_btn and query.strip():
+        url_val = target_url_input.strip() if target_url_input else None
         with st.spinner("Running pipeline… this may take a minute."):
-            data = run_pipeline(query.strip())
+            try:
+                data = run_pipeline(query.strip(), target_url=url_val)
+            except PermissionError as e:
+                st.error(f"🚫 {e}")
+                data = None
         if data:
             st.success(f"Done! Extracted **{data['total_results']}** items.")
             st.cache_data.clear()
@@ -348,18 +357,25 @@ view = st.radio(
     label_visibility="collapsed",
 )
 
-# Identify dynamic fields (non-mandatory)
-dynamic_fields = [f for f in schema_fields if f["name"] not in MANDATORY_FIELDS]
+# All fields are dynamic now
+all_fields = schema_fields
 
 if view == "🃏 Cards":
     for idx, item in enumerate(results):
-        title = item.get("title") or "Untitled"
+        # Try to find a title-like field for display
+        title = (
+            item.get("title")
+            or item.get("name")
+            or item.get("headline")
+            or "Untitled"
+        )
         source = item.get("source_link", "")
-        content = item.get("main_content", "")
 
-        # Build dynamic field HTML
+        # Build field HTML for all schema fields (skip source_link since shown separately)
         fields_html = ""
-        for f in dynamic_fields:
+        for f in all_fields:
+            if f["name"] == "source_link":
+                continue  # shown as the card link already
             val = item.get(f["name"])
             if val is None or val == "null":
                 rendered = '<span class="badge badge-null">null</span>'
@@ -377,8 +393,7 @@ if view == "🃏 Cards":
         st.markdown(f"""
         <div class="result-card">
             <div class="rc-title">{idx + 1}. {title}</div>
-            <div class="rc-source">🔗 <a href="{source}" target="_blank" style="color:#818cf8">{source}</a></div>
-            <div class="rc-content">{content[:400]}{'…' if len(str(content)) > 400 else ''}</div>
+            {'<div class="rc-source">🔗 <a href="' + source + '" target="_blank" style="color:#818cf8">' + source + '</a></div>' if source else ''}
             {fields_html}
         </div>
         """, unsafe_allow_html=True)
